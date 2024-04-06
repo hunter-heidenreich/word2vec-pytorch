@@ -1,11 +1,16 @@
 """Data module for word2vec."""
 
+import logging
+
 import torch
 from datasets import load_dataset
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from word2vec.tokenizer import get_tokenizer, add_spaces_around_foreign_characters
+from word2vec.util import num2str
+
+logger = logging.getLogger(__name__)
 
 
 class WindowedDatasets(Dataset):
@@ -30,9 +35,17 @@ class WindowedDatasets(Dataset):
         vocab_size: int = 1_000_000,
         min_frequency: int = 2,
     ):
+        logger.info(
+            f"Constructing WindowedDatasets with window_size={window_size}, "
+            f"vocab_size={num2str(vocab_size)}, min_frequency={min_frequency}"
+        )
+
         self.window_size = window_size
         self.dataset = load_dataset(dataset_name, subset, split=split)["text"]
+        logger.info(f"Number of examples in the dataset: {num2str(len(self.dataset))}")
+
         self.dataset = [
+            # BERT-like treatment of foreign characters
             add_spaces_around_foreign_characters(text)
             for text in self.dataset
             if text.strip()
@@ -46,11 +59,16 @@ class WindowedDatasets(Dataset):
             vocab_size=vocab_size,
             min_frequency=min_frequency,
         )
+        logger.info(
+            f"True tokenizer vocab size, after training: {num2str(self.tokenizer.get_vocab_size())}"
+        )
 
         # encode dataset
         self.centers = []
         self.contexts = []
-        for text in tqdm(self.dataset, desc="Encoding dataset"):
+        for text in tqdm(
+            self.dataset, desc="Encoding dataset", disable=logger.level >= logging.INFO
+        ):
             encoding = self.tokenizer.encode(text)
             datum = encoding.ids
             # pre- and post-pad with <pad> token
@@ -67,7 +85,7 @@ class WindowedDatasets(Dataset):
                 )
                 self.centers.append(center)
                 self.contexts.append(context)
-        print(f"Number of examples: {len(self):,}")
+        logger.info(f"Number of window samples: {num2str(len(self))}")
 
     def __len__(self):
         return len(self.centers)

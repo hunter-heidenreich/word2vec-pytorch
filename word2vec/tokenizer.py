@@ -1,3 +1,4 @@
+import logging
 import os
 import unicodedata
 from typing import Iterable, Optional
@@ -5,6 +6,8 @@ from typing import Iterable, Optional
 from datasets import load_dataset
 from tokenizers import Tokenizer
 from tokenizers import trainers, normalizers, models, pre_tokenizers, processors
+
+logger = logging.getLogger(__name__)
 
 
 def add_spaces_around_foreign_characters(text: str) -> str:
@@ -37,6 +40,14 @@ def get_tokenizer(
 ) -> Tokenizer:
     """Get a tokenizer for a dataset. If the tokenizer is not found, train a new one.
 
+    Tokenizer is a WordLevel tokenizer with special tokens: <unk>, <pad>, <eos>, <sos>.
+    This tokenizer is trained on the training set of the dataset.
+    - Normalizer: NFD, Lowercase, StripAccents, Strip
+    - Pre-tokenizer: Digits, Whitespace
+    - Post-processor: TemplateProcessing with special tokens
+    - Trainer: WordLevelTrainer with vocab_size, min_frequency, special tokens
+    - Vocabulary: <unk>, <pad>, <eos>, <sos> + words with frequency >= min_frequency
+
     Args:
         data: The dataset.
         dataset_name: The name of the dataset.
@@ -57,7 +68,7 @@ def get_tokenizer(
         tokenizer = Tokenizer.from_file(
             f"tokenizers/{subset}-vocab_{min_frequency}_{size_str_mil}.json"
         )
-        print("Loaded. Vocabulary size:", tokenizer.get_vocab_size())
+        logger.info("Loaded tokenizer from file.")
         return tokenizer
     except Exception:
         pass
@@ -102,9 +113,9 @@ def get_tokenizer(
             vocab_size=vocab_size,
             min_frequency=min_frequency,
             special_tokens=["<unk>", "<pad>", "<eos>", "<sos>"],
-            show_progress=True,
+            show_progress=logging.getLogger().level <= logging.INFO,
         ),
     )
     tokenizer.save(f"tokenizers/{subset}-vocab_{min_frequency}_{size_str_mil}.json")
-    print("Trained. Vocabulary size:", tokenizer.get_vocab_size())
+    logger.info("Trained tokenizer and saved to file.")
     return tokenizer

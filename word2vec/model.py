@@ -8,7 +8,7 @@ import torch.nn as nn
 
 @dataclass
 class Output:
-    """Output of CBOW model."""
+    """Output of Word2Vec model."""
 
     logits: torch.Tensor
     loss: torch.Tensor
@@ -19,6 +19,9 @@ class CBOW(nn.Module):
 
     Naive implementation of CBOW model,
     - does not use hierarchical softmax or negative sampling.
+    - Complexity: O(N x D + D x V) for prediction,
+                  where N is the number of context words (2 * window_size),
+                    D is the embedding dimension, and V is the vocabulary size.
     """
 
     def __init__(
@@ -69,7 +72,11 @@ class SkipGram(nn.Module):
     """SkipGram model.
 
     Naive implementation of SkipGram model,
-    - does not use hierarchical softmax or negative sampling."""
+    - does not use hierarchical softmax or negative sampling.
+    - Complexity: O(D + D x V) for prediction,
+                  where D is the embedding dimension,
+                  and V is the vocabulary size.
+    """
 
     def __init__(self, vocab_size: int, embedding_dim: int):
         super(SkipGram, self).__init__()
