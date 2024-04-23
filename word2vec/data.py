@@ -1,7 +1,6 @@
 """Data module for word2vec."""
 
 import logging
-
 import torch
 from datasets import load_dataset
 from torch.utils.data import Dataset
@@ -15,15 +14,15 @@ logger = logging.getLogger(__name__)
 
 class WindowedDatasets(Dataset):
     """
-    Dataset for word2vec.
+    Dataset for word2vec model training with sliding window context sampling.
 
-    Args:
-        dataset_name (str): Name of the dataset to use.
-        subset (str): Name of the subset of the dataset to use.
-        split (str): Name of the split to use.
-        window_size (int): Size of the window to use.
-        vocab_size (int): Size of the vocabulary to use.
-        min_frequency (int): Minimum frequency of a token to be included in the vocabulary.
+    Attributes:
+        dataset_name (str): Name of the dataset.
+        subset (str): Specific subset of the dataset.
+        split (str): Dataset split (e.g., 'train').
+        window_size (int): Number of words on each side of the center word.
+        vocab_size (int): Maximum number of words in the vocabulary.
+        min_frequency (int): Minimum occurrence of words to be included in the vocabulary.
     """
 
     def __init__(
@@ -36,22 +35,19 @@ class WindowedDatasets(Dataset):
         min_frequency: int = 2,
     ):
         logger.info(
-            f"Constructing WindowedDatasets with window_size={window_size}, "
-            f"vocab_size={num2str(vocab_size)}, min_frequency={min_frequency}"
+            f"Initializing WindowedDatasets with window_size={window_size}, vocab_size={num2str(vocab_size)}, min_frequency={min_frequency}"
         )
 
         self.window_size = window_size
-        self.dataset = load_dataset(dataset_name, subset, split=split)["text"]
-        logger.info(f"Number of examples in the dataset: {num2str(len(self.dataset))}")
+        dataset = load_dataset(dataset_name, subset, split=split)["text"]
+        logger.info(f"Loaded {num2str(len(dataset))} examples from dataset.")
 
         self.dataset = [
-            # BERT-like treatment of foreign characters
             add_spaces_around_foreign_characters(text)
-            for text in self.dataset
+            for text in dataset
             if text.strip()
         ]
 
-        # get tokenizer
         self.tokenizer = get_tokenizer(
             data=self.dataset,
             dataset_name=dataset_name,
@@ -60,22 +56,21 @@ class WindowedDatasets(Dataset):
             min_frequency=min_frequency,
         )
         logger.info(
-            f"True tokenizer vocab size, after training: {num2str(self.tokenizer.get_vocab_size())}"
+            f"Tokenizer loaded with vocabulary size of {num2str(self.tokenizer.get_vocab_size())}"
         )
 
-        # encode dataset
-        self.centers = []
-        self.contexts = []
+        self.centers, self.contexts = self._encode_dataset()
+
+    def _encode_dataset(self):
+        centers = []
+        contexts = []
+        pad_id = self.tokenizer.token_to_id("<pad>")
         for text in tqdm(
             self.dataset, desc="Encoding dataset", disable=logger.level >= logging.INFO
         ):
             encoding = self.tokenizer.encode(text)
-            datum = encoding.ids
-            # pre- and post-pad with <pad> token
             datum = (
-                [self.tokenizer.token_to_id("<pad>")] * self.window_size
-                + datum
-                + [self.tokenizer.token_to_id("<pad>")] * self.window_size
+                [pad_id] * self.window_size + encoding.ids + [pad_id] * self.window_size
             )
             for i in range(self.window_size, len(datum) - self.window_size):
                 center = datum[i]
@@ -83,9 +78,10 @@ class WindowedDatasets(Dataset):
                     datum[i - self.window_size : i]
                     + datum[i + 1 : i + self.window_size + 1]
                 )
-                self.centers.append(center)
-                self.contexts.append(context)
-        logger.info(f"Number of window samples: {num2str(len(self))}")
+                centers.append(center)
+                contexts.append(context)
+        logger.info(f"Generated {num2str(len(centers))} training samples.")
+        return centers, contexts
 
     def __len__(self):
         return len(self.centers)
@@ -94,19 +90,7 @@ class WindowedDatasets(Dataset):
         return self.centers[idx], torch.LongTensor(self.contexts[idx])
 
     def get_tokenizer(self):
-        """
-        Get the tokenizer used by the dataset.
-
-        Returns:
-            Tokenizer: The tokenizer used by the dataset.
-        """
         return self.tokenizer
 
     def get_vocab_size(self):
-        """
-        Get the size of the vocabulary used by the dataset.
-
-        Returns:
-            int: The size of the vocabulary.
-        """
         return len(self.tokenizer)
