@@ -1,5 +1,5 @@
 import logging
-import os
+from pathlib import Path
 import unicodedata
 from typing import Iterable, Optional
 
@@ -10,79 +10,40 @@ from tokenizers import trainers, normalizers, models, pre_tokenizers, processors
 logger = logging.getLogger(__name__)
 
 
+SPECIAL_TOKENS = ["<unk>", "<pad>", "<eos>", "<sos>"]
+
+
 def add_spaces_around_foreign_characters(text: str) -> str:
-    """Add spaces around foreign characters in a text.
+    """Add spaces around non-ASCII characters in a text.
+
+    This function modifies the input string by inserting spaces around each character
+    categorized as a letter but with an ASCII value above 128. This helps in situations
+    where such characters need to be tokenized separately in text processing workflows.
 
     Args:
-        text: The text.
+        text (str): The text to process.
 
     Returns:
-        The text with spaces around foreign characters.
+        str: The processed text with spaces added around non-ASCII letters.
     """
-    new_text = []
-    for char in text:
-        # Check character category
-        cat = unicodedata.category(char)
-        # Letter categories start with 'L'
-        if cat.startswith("L") and ord(char) >= 128:
-            new_text.append(" " + char + " ")
-        else:
-            new_text.append(char)
-    return "".join(new_text)
+    return "".join(
+        f" {char} "
+        if unicodedata.category(char).startswith("L") and ord(char) >= 128
+        else char
+        for char in text
+    )
 
 
-def get_tokenizer(
-    data: Optional[Iterable[str]] = None,
-    dataset_name: Optional[str] = "wikitext",
-    subset: Optional[str] = "wikitext-2-raw-v1",
-    vocab_size: int = 1_000_000,
-    min_frequency: int = 2,
-) -> Tokenizer:
-    """Get a tokenizer for a dataset. If the tokenizer is not found, train a new one.
+def setup_tokenizer():
+    """Configure and return a tokenizer with pre-set configurations.
 
-    Tokenizer is a WordLevel tokenizer with special tokens: <unk>, <pad>, <eos>, <sos>.
-    This tokenizer is trained on the training set of the dataset.
-    - Normalizer: NFD, Lowercase, StripAccents, Strip
-    - Pre-tokenizer: Digits, Whitespace
-    - Post-processor: TemplateProcessing with special tokens
-    - Trainer: WordLevelTrainer with vocab_size, min_frequency, special tokens
-    - Vocabulary: <unk>, <pad>, <eos>, <sos> + words with frequency >= min_frequency
-
-    Args:
-        data: The dataset.
-        dataset_name: The name of the dataset.
-        subset: The subset of the dataset.
-        vocab_size: The size of the vocabulary.
-        min_frequency: The minimum frequency of a token to be included in the vocabulary.
+    This function initializes a WordLevel tokenizer and sets up its normalizers,
+    pre-tokenizers, and post-processors, including handling of special tokens.
 
     Returns:
-        The tokenizer.
+        Tokenizer: A fully configured tokenizer.
     """
-    if not os.path.exists("tokenizers"):
-        os.makedirs("tokenizers")
-
-    size_str_mil = (
-        f"{vocab_size // 1_000_000}M" if vocab_size >= 1_000_000 else f"{vocab_size}"
-    )
-    try:
-        tokenizer = Tokenizer.from_file(
-            f"tokenizers/{subset}-vocab_{min_frequency}_{size_str_mil}.json"
-        )
-        logger.info("Loaded tokenizer from file.")
-        return tokenizer
-    except Exception:
-        pass
-
-    if data is None:
-        data = load_dataset(dataset_name, subset, split="train")["text"]
-        data = [
-            add_spaces_around_foreign_characters(text) for text in data if len(text) > 0
-        ]
-
-    # Initialize a tokenizer
-    tokenizer = Tokenizer(
-        models.WordLevel(unk_token="<unk>"),
-    )
+    tokenizer = Tokenizer(models.WordLevel(unk_token="<unk>"))
     tokenizer.normalizer = normalizers.Sequence(
         [
             normalizers.NFD(),
@@ -97,25 +58,81 @@ def get_tokenizer(
             pre_tokenizers.Whitespace(),
         ]
     )
-    special_tokens = [
-        ("<unk>", 0),
-        ("<pad>", 1),
-        ("<eos>", 2),
-        ("<sos>", 3),
-    ]
+    special_tokens = [(token, i) for i, token in enumerate(SPECIAL_TOKENS)]
     tokenizer.post_processor = processors.TemplateProcessing(
         single="<sos> $A <eos>",
         special_tokens=special_tokens,
     )
-    tokenizer.train_from_iterator(
-        data,
-        trainer=trainers.WordLevelTrainer(
-            vocab_size=vocab_size,
-            min_frequency=min_frequency,
-            special_tokens=["<unk>", "<pad>", "<eos>", "<sos>"],
-            show_progress=logging.getLogger().level <= logging.INFO,
-        ),
+    return tokenizer
+
+
+def get_tokenizer(
+    data: Optional[Iterable[str]] = None,
+    dataset_name: str = "wikitext",
+    subset: str = "wikitext-2-raw-v1",
+    vocab_size: int = 1_000_000,
+    min_frequency: int = 2,
+) -> Optional[Tokenizer]:
+    """Retrieve or train a tokenizer for a given dataset.
+
+    Loads a tokenizer from a saved file if available; otherwise, it initializes a tokenizer
+    and trains it on the provided or automatically loaded data from a specified dataset.
+
+    Args:
+        data (Optional[Iterable[str]]): The dataset to train the tokenizer.
+        dataset_name (str): The dataset name to load if data is not provided.
+        subset (str): The specific subset of the dataset to use.
+        vocab_size (int): The maximum size of the vocabulary.
+        min_frequency (int): The minimum frequency a token must have to be included.
+
+    Returns:
+        Tokenizer: The loaded or trained tokenizer, or None if training failed.
+    """
+    tokenizers_dir = Path("tokenizers")
+    tokenizers_dir.mkdir(exist_ok=True)
+    size_str_mil = (
+        f"{vocab_size // 1_000_000}M" if vocab_size >= 1_000_000 else f"{vocab_size}"
     )
-    tokenizer.save(f"tokenizers/{subset}-vocab_{min_frequency}_{size_str_mil}.json")
-    logger.info("Trained tokenizer and saved to file.")
+    tokenizer_path = (
+        tokenizers_dir / f"{subset}-vocab_{min_frequency}_{size_str_mil}.json"
+    )
+
+    if tokenizer_path.exists():
+        tokenizer = Tokenizer.from_file(str(tokenizer_path))
+        logger.info("Loaded tokenizer from file.")
+        return tokenizer
+
+    if data is None:
+        try:
+            dataset = load_dataset(dataset_name, subset, split="train")
+            data = [
+                add_spaces_around_foreign_characters(text)
+                for text in dataset["text"]
+                if text
+            ]
+        except ValueError as e:
+            logger.error(f"Failed to load dataset {dataset_name}/{subset}: {e}")
+            return None
+
+    if not data:
+        logger.error("Data is empty. Cannot train tokenizer.")
+        return None
+
+    tokenizer = setup_tokenizer()
+    try:
+        tokenizer.train_from_iterator(
+            data,
+            trainer=trainers.WordLevelTrainer(
+                vocab_size=vocab_size,
+                min_frequency=min_frequency,
+                special_tokens=SPECIAL_TOKENS,
+                show_progress=logging.getLogger().level <= logging.INFO,
+            ),
+        )
+        tokenizer.save(str(tokenizer_path))
+        logger.info("Trained tokenizer and saved to file.")
+    except Exception as e:
+        logger.error(f"Failed to train or save tokenizer: {e}")
+        return None
+
     return tokenizer
